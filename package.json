@@ -1,0 +1,15 @@
+{
+  "name": "railway-marketplace-access-checker",
+  "version": "1.0.0",
+  "description": "Railway-ready diagnostics for checking marketplace parsing access.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "check": "node src/check.js",
+    "dev": "node --watch src/server.js"
+  }
+}
