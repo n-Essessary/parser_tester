@@ -34,6 +34,8 @@ npm run check
 4. Deploy.
 5. Open the public Railway URL and call `/check`.
 
+On every container start, the app also writes a compact startup diagnostic to Railway logs. Look for lines that start with `startup-check`.
+
 The service uses `process.env.PORT`, so Railway can assign the port automatically.
 
 ## Reading Results
@@ -66,6 +68,7 @@ Typical verdicts:
 - `MAX_BODY_BYTES`: max response bytes read per target, default `1500000`.
 - `USER_AGENT`: override the browser-like user agent.
 - `HOST`: bind host, default `0.0.0.0`. For local sandboxed runs, use `127.0.0.1`.
+- `STARTUP_CHECK`: run diagnostics when the server starts, default `true`. Set to `false` to disable startup log checks.
 
 ## Notes
 

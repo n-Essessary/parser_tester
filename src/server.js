@@ -4,6 +4,7 @@ import { getTarget, targets } from "./targets.js";
 
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? "0.0.0.0";
+const runStartupCheck = process.env.STARTUP_CHECK !== "false";
 
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload, null, 2);
@@ -63,6 +64,49 @@ async function handleAll(req, res) {
   });
 }
 
+function compactLogResult(result) {
+  return {
+    ok: result.ok,
+    target: result.target,
+    status: result.status ?? null,
+    final_url: result.final_url ?? null,
+    duration_ms: result.duration_ms,
+    verdict: result.verdict,
+    blocked_likely: result.detection?.blocked_likely ?? null,
+    direct_http_promising: result.detection?.direct_http_promising ?? null,
+    signals: result.detection?.signals ?? null,
+    response_headers: result.response_headers ?? null,
+    title: result.body?.title ?? null,
+    bytes_read: result.body?.bytes_read ?? null,
+    snippet: result.body?.snippet ? result.body.snippet.slice(0, 350) : null,
+    error: result.error ?? null
+  };
+}
+
+async function logStartupDiagnostics() {
+  console.log("[startup-check] starting marketplace access diagnostics");
+
+  const results = {};
+  for (const [key, target] of Object.entries(targets)) {
+    const result = await runHttpDiagnostic(target);
+    results[key] = compactLogResult(result);
+    console.log("[startup-check:" + key + "] " + JSON.stringify(results[key]));
+  }
+
+  console.log("[startup-check:summary] " + JSON.stringify({
+    checked_at: new Date().toISOString(),
+    environment: environmentInfo(),
+    results: Object.fromEntries(Object.entries(results).map(([key, result]) => [key, {
+      ok: result.ok,
+      status: result.status,
+      verdict: result.verdict,
+      blocked_likely: result.blocked_likely,
+      direct_http_promising: result.direct_http_promising,
+      title: result.title
+    }]))
+  }));
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
@@ -117,4 +161,15 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(port, host, () => {
   console.log(`Marketplace access checker listening on ${host}:${port}`);
+
+  if (runStartupCheck) {
+    logStartupDiagnostics().catch((error) => {
+      console.error("[startup-check:error] " + JSON.stringify({
+        name: error.name,
+        message: error.message
+      }));
+    });
+  } else {
+    console.log("[startup-check] skipped because STARTUP_CHECK=false");
+  }
 });
