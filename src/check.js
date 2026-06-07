@@ -14,23 +14,26 @@ if (entries.length === 0) {
 const results = [];
 for (const [key, target] of entries) {
   const checks = [
-    await runHttpDiagnostic(target, { endpoint: "home", url: target.url }),
-    await runHttpDiagnostic(target, { endpoint: "listing", url: target.listingUrl ?? target.url })
+    await runHttpDiagnostic(target, { endpoint: "home", url: target.url })
   ];
+  for (const url of target.listingUrls) {
+    checks.push(await runHttpDiagnostic(target, { endpoint: "listing", url }));
+  }
 
-  const kill_switch_triggered = checks.some((item) => item.kill_switch?.triggered !== false);
-  const can_continue = checks.every((item) => item.kill_switch?.can_continue === true);
+  const listingChecks = checks.filter((item) => item.endpoint === "listing");
+  const staticListings = listingChecks.filter((item) => item.listing_analysis?.scrapeable_static);
 
   results.push({
     key,
     target: target.name,
     checks,
     summary: {
-      kill_switch_triggered,
-      can_continue,
-      recommendation: can_continue
-        ? "Pass. Continue to scrape."
-        : "Fail. Cloudflare/ASN block likely; use residential proxy or partner route."
+      scrapeable_static: staticListings.length > 0,
+      requires_js: listingChecks.some((item) => item.listing_analysis?.requires_js),
+      real_listing_count: listingChecks.filter((item) => item.listing_analysis?.content_classification === "real_listing").length,
+      recommendation: staticListings.length > 0
+        ? "Pass. At least one listing exposes parseable static offer rows."
+        : "Fail/conditional. No listing exposed parseable static offer rows in this CLI check."
     }
   });
 }
