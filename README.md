@@ -1,11 +1,13 @@
-# Railway Marketplace Access Checker
+# Coolify Marketplace Kill-Switch Checker
 
-Small Railway-ready service for checking whether marketplace pages can be reached for future parsing.
+Small Coolify-ready service for pre-checking marketplace accessibility before parsing.
 
 Targets:
 
-- Eldorado WoW Classic Gold
-- Z2U WoW Classic TBC Gold
+- Z2U
+- IGV
+- G2A
+- ZeusX
 
 ## Local Run
 
@@ -17,8 +19,10 @@ Open:
 
 - `http://localhost:3000/health`
 - `http://localhost:3000/check`
-- `http://localhost:3000/check/eldorado`
 - `http://localhost:3000/check/z2u`
+- `http://localhost:3000/check/igv`
+- `http://localhost:3000/check/g2a`
+- `http://localhost:3000/check/zeusx`
 
 CLI check:
 
@@ -26,44 +30,39 @@ CLI check:
 npm run check
 ```
 
-## Railway Deploy
+## Coolify Deploy
 
-1. Create a new Railway project.
+1. Create a new Coolify application from this repository.
 2. Connect this repository or upload the project.
-3. Railway should detect Node.js through Nixpacks.
-4. Deploy.
-5. Open the public Railway URL and call `/check`.
+3. Set Build Pack to Node.js/Nixpacks (auto-detected in most setups).
+4. Start command: `npm start`.
+5. Deploy.
+6. Open your public Coolify URL and call `/check`.
 
-On every container start, the app also writes a compact startup diagnostic to Railway logs. Look for lines that start with `startup-check`.
+On every container start, the app writes startup kill-switch diagnostics to logs. Look for lines beginning with `startup-check`.
 
-The service uses `process.env.PORT`, so Railway can assign the port automatically.
+The service uses `process.env.PORT`, so Coolify can assign the port automatically.
 
 ## Reading Results
 
 Important response fields:
 
-- `status`: HTTP status returned by the target.
-- `final_url`: final URL after redirects.
-- `response_headers`: selected headers useful for detecting protection layers.
-- `detection.blocked_likely`: high-level anti-bot/blocking signal.
-- `detection.direct_http_promising`: whether simple HTTP parsing looks realistic.
-- `detection.signals`: individual checks for Cloudflare, captcha, access denied, rate limit, JS-required pages, and common bot protection systems.
-- `body.title`, `body.snippet`: safe preview of returned content.
-- `extraction_hints`: script and API-like strings found in HTML.
-- `verdict`: compact conclusion.
+- `checks`: two probes per target (`home` and `listing`).
+- `checks[].status`: HTTP status returned by the probe URL.
+- `checks[].response_headers`: selected headers useful for Cloudflare detection (`cf-ray`, `cf-mitigated`, etc).
+- `checks[].kill_switch`: pass/fail gate for parser launch.
+- `checks[].kill_switch.reason`: `cloudflare_or_asn_block`, `edge_waf_or_asn_block`, `http_ok_normal_body`, or fallback reason.
+- `summary.kill_switch_triggered`: `true` if any probe fails kill-switch criteria.
+- `summary.can_continue`: `true` only when both probes pass (200 + normal body).
 
-Typical verdicts:
+Kill-switch logic:
 
-- `direct_http_access_ok`: direct HTTP parsing likely works.
-- `html_access_ok_needs_data_source_analysis`: page opens, but useful data may be loaded by JavaScript/API.
-- `blocked_or_challenged`: target likely blocks or challenges this environment.
-- `http_error`: target returned a 4xx/5xx status.
-- `timeout`: target did not respond in time.
-- `network_or_tls_error`: DNS, TLS, or network-level failure.
+- `403` / `503` / `cf-mitigated: challenge` => blocked by Cloudflare or edge WAF/datacenter ASN. Use residential proxy or partner route.
+- `200` + normal HTML body => pass, can continue to deeper parsing checks.
 
 ## Environment Variables
 
-- `PORT`: server port. Railway sets this automatically.
+- `PORT`: server port. Coolify sets this automatically.
 - `REQUEST_TIMEOUT_MS`: request timeout, default `25000`.
 - `MAX_BODY_BYTES`: max response bytes read per target, default `1500000`.
 - `USER_AGENT`: override the browser-like user agent.
@@ -72,4 +71,4 @@ Typical verdicts:
 
 ## Notes
 
-This project intentionally starts with direct HTTP diagnostics because it is cheap and reliable on Railway. If results show JavaScript-only content but no hard block, the next step is to add a Playwright-based check and compare browser-rendered content against the HTTP result.
+This project is focused on cheap, fast HTTP kill-switch diagnostics. If a target passes here but parsing still fails, the next step is browser-based verification (Playwright) and proxy routing strategy.

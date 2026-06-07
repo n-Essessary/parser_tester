@@ -1,7 +1,7 @@
 {
   "name": "railway-marketplace-access-checker",
   "version": "1.0.0",
-  "description": "Railway-ready diagnostics for checking marketplace parsing access.",
+  "description": "Coolify-ready kill-switch diagnostics for marketplace access checks.",
   "type": "module",
   "private": true,
   "engines": {

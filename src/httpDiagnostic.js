@@ -39,6 +39,7 @@ function pickHeaders(headers) {
     "cache-control",
     "location",
     "set-cookie",
+    "cf-mitigated",
     "cf-ray",
     "cf-cache-status",
     "x-cache",
@@ -81,15 +82,31 @@ function detectSignals(status, headers, html) {
   }
 
   signals.uses_cloudflare = /cloudflare/i.test(headers.get("server") ?? "") || Boolean(headers.get("cf-ray"));
+  signals.cf_mitigated_challenge = /challenge/i.test(headers.get("cf-mitigated") ?? "");
   signals.http_block_status = [401, 403, 407, 418, 429, 451, 503].includes(status);
   signals.empty_or_tiny_html = html.length > 0 && html.length < 2000;
+  signals.contains_html = /<html|<body|<!doctype html/i.test(html);
   signals.has_next_data = /<script[^>]+id=["']__NEXT_DATA__["']/i.test(html);
   signals.has_nuxt_data = /window\.__NUXT__|__NUXT_DATA__/i.test(html);
   signals.has_json_ld = /application\/ld\+json/i.test(html);
   signals.has_visible_offer_terms = /gold|price|seller|server|alliance|horde|delivery/i.test(html);
+  signals.normal_body_likely = status === 200 &&
+    signals.contains_html &&
+    html.length >= 2000 &&
+    !signals.empty_or_tiny_html &&
+    !signals.cloudflare_challenge &&
+    !signals.captcha &&
+    !signals.access_denied;
+  signals.cloudflare_asn_block_likely = signals.uses_cloudflare && (
+    status === 403 ||
+    status === 503 ||
+    signals.cf_mitigated_challenge ||
+    signals.cloudflare_challenge
+  );
 
   const blocked = signals.http_block_status ||
     signals.cloudflare_challenge ||
+    signals.cf_mitigated_challenge ||
     signals.captcha ||
     signals.access_denied ||
     signals.rate_limit ||
@@ -99,7 +116,7 @@ function detectSignals(status, headers, html) {
 
   return {
     blocked_likely: blocked,
-    direct_http_promising: !blocked && status >= 200 && status < 400 && html.length > 5000,
+    direct_http_promising: !blocked && signals.normal_body_likely,
     signals
   };
 }
@@ -121,6 +138,9 @@ function extractScriptHints(html) {
 }
 
 function verdictFor(status, html, detection) {
+  if (status === 403 || status === 503 || detection.signals.cf_mitigated_challenge) {
+    return "blocked_asn_or_challenge";
+  }
   if (detection.blocked_likely) {
     return "blocked_or_challenged";
   }
@@ -136,14 +156,59 @@ function verdictFor(status, html, detection) {
   return "inconclusive";
 }
 
+function killSwitchFor(status, detection) {
+  const cloudflareAsnKillSwitch = detection.signals.cf_mitigated_challenge ||
+    (detection.signals.uses_cloudflare && (
+      status === 403 ||
+      status === 503 ||
+      detection.signals.cloudflare_challenge
+    ));
+
+  if (cloudflareAsnKillSwitch) {
+    return {
+      triggered: true,
+      reason: "cloudflare_or_asn_block",
+      can_continue: false,
+      recommendation: "Cloudflare likely blocks datacenter ASN. Use residential proxy or partner traffic source."
+    };
+  }
+
+  if (status === 403 || status === 503) {
+    return {
+      triggered: true,
+      reason: "edge_waf_or_asn_block",
+      can_continue: false,
+      recommendation: "Edge WAF likely blocks datacenter ASN. Use residential proxy or partner traffic source."
+    };
+  }
+
+  if (status === 200 && detection.signals.normal_body_likely && !detection.blocked_likely) {
+    return {
+      triggered: false,
+      reason: "http_ok_normal_body",
+      can_continue: true,
+      recommendation: "HTTP probe passed, scraping checks may continue."
+    };
+  }
+
+  return {
+    triggered: true,
+    reason: "inconclusive_or_soft_block",
+    can_continue: false,
+    recommendation: "Response does not match pass criteria. Re-check with browser and/or proxy before scraping."
+  };
+}
+
 export async function runHttpDiagnostic(target, options = {}) {
   const startedAt = new Date();
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const requestUrl = options.url ?? target.url;
+  const endpoint = options.endpoint ?? null;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(target.url, {
+    const response = await fetch(requestUrl, {
       method: "GET",
       headers: browserHeaders,
       redirect: "follow",
@@ -154,11 +219,13 @@ export async function runHttpDiagnostic(target, options = {}) {
     const buffer = Buffer.from(arrayBuffer).subarray(0, MAX_BODY_BYTES);
     const html = buffer.toString("utf8");
     const detection = detectSignals(response.status, response.headers, html);
+    const kill_switch = killSwitchFor(response.status, detection);
 
     return {
       ok: true,
       target: target.name,
-      requested_url: target.url,
+      endpoint,
+      requested_url: requestUrl,
       final_url: response.url,
       status: response.status,
       status_text: response.statusText,
@@ -174,6 +241,7 @@ export async function runHttpDiagnostic(target, options = {}) {
         snippet: normalizeText(html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ")).slice(0, 1200)
       },
       detection,
+      kill_switch,
       extraction_hints: extractScriptHints(html),
       verdict: verdictFor(response.status, html, detection)
     };
@@ -181,13 +249,20 @@ export async function runHttpDiagnostic(target, options = {}) {
     return {
       ok: false,
       target: target.name,
-      requested_url: target.url,
+      endpoint,
+      requested_url: requestUrl,
       duration_ms: Date.now() - startedAt.getTime(),
       checked_at: startedAt.toISOString(),
       error: {
         name: error.name,
         message: error.message,
         cause: error.cause?.code ?? error.cause?.message ?? null
+      },
+      kill_switch: {
+        triggered: true,
+        reason: "network_or_timeout_error",
+        can_continue: false,
+        recommendation: "Network error during kill-switch probe. Retry from deployment host."
       },
       verdict: error.name === "AbortError" ? "timeout" : "network_or_tls_error"
     };

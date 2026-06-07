@@ -13,14 +13,35 @@ if (entries.length === 0) {
 
 const results = [];
 for (const [key, target] of entries) {
-  const result = await runHttpDiagnostic(target);
-  results.push({ key, ...result });
+  const checks = [
+    await runHttpDiagnostic(target, { endpoint: "home", url: target.url }),
+    await runHttpDiagnostic(target, { endpoint: "listing", url: target.listingUrl ?? target.url })
+  ];
+
+  const kill_switch_triggered = checks.some((item) => item.kill_switch?.triggered !== false);
+  const can_continue = checks.every((item) => item.kill_switch?.can_continue === true);
+
+  results.push({
+    key,
+    target: target.name,
+    checks,
+    summary: {
+      kill_switch_triggered,
+      can_continue,
+      recommendation: can_continue
+        ? "Pass. Continue to scrape."
+        : "Fail. Cloudflare/ASN block likely; use residential proxy or partner route."
+    }
+  });
 }
 
 console.log(JSON.stringify({
   environment: {
     node: process.version,
     platform: process.platform,
+    coolify: Boolean(process.env.COOLIFY_URL || process.env.COOLIFY_FQDN || process.env.COOLIFY_BRANCH),
+    coolify_url: process.env.COOLIFY_URL ?? null,
+    coolify_fqdn: process.env.COOLIFY_FQDN ?? null,
     railway: Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID),
     railway_environment: process.env.RAILWAY_ENVIRONMENT ?? null,
     service: process.env.RAILWAY_SERVICE_NAME ?? null
